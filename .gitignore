@@ -5,7 +5,6 @@ __pycache__/
 venv/
 .env
 
-data/recordings/
 *.pkl
 *.npy
 *.bag
@@ -16,7 +15,6 @@ data/recordings/
 
 .ipynb_checkpoints/
 
-logs/
 *.log
 
 *.pth
