@@ -24,11 +24,16 @@ Główne założenia/ograniczenia:
 Python / Node / inne — wersje
 Zależności systemowe 
 
+- Python 3.12+
+- ROS2 Jazzy + Gazebo Harmonic + PX4 SITL (pełna instrukcja: [SIM_README.md](SIM_README.md))
+
 
 ## 3. Installation
 
 pip install / npm install / clone + setup
 Konfiguracja środowiska (.env, config files)
+
+Środowisko symulacyjne (ROS2, Gazebo, PX4, uXRCE-DDS) — patrz [SIM_README.md](SIM_README.md).
 
 
 ## 4. Project Structure
