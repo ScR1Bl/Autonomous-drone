@@ -1,25 +1,12 @@
 import cv2
 import numpy as np
+from base_detector import Detector
+import random
 
-from .base_detector import BaseFeatureDetector, DetectionResult
-
-
-class ORBDetector(BaseFeatureDetector):
-    """ORB-style feature detector scaffold.
-
-    This class currently implements the detector side of ORB:
-    FAST keypoint detection, corner scoring, per-level non-maximum
-    suppression, and an image pyramid. Descriptor extraction is intentionally
-    left as an empty placeholder so BRIEF can be added next.
-    """
-
-    name = "ORB"
-    descriptor_dim = 0
-
+class ORB(Detector):
     def __init__(
         self,
-        max_keypoints=None,
-        config=None,
+        img,
         threshold=40,
         successive_threshold=9,
         dist_threshold=10,
@@ -27,15 +14,23 @@ class ORBDetector(BaseFeatureDetector):
         scale_factor=1.2,
         min_blur=1.0,
         max_blur=1.7,
+        patch_size = 9,
+        disc_len = 256,
+        seed = 42
     ):
-        super().__init__(max_keypoints=max_keypoints, config=config)
-        self.threshold = self.config.get("threshold", threshold)
-        self.successive_threshold = self.config.get("successive_threshold", successive_threshold)
-        self.dist_threshold = self.config.get("dist_threshold", dist_threshold)
-        self.levels = self.config.get("levels", levels)
-        self.scale_factor = self.config.get("scale_factor", scale_factor)
-        self.min_blur = self.config.get("min_blur", min_blur)
-        self.max_blur = self.config.get("max_blur", max_blur)
+        super().__init__(img)
+        self.threshold = threshold
+        self.successive_threshold = successive_threshold
+        self.dist_threshold = dist_threshold
+        self.levels = levels
+        self.scale_factor = scale_factor
+        self.min_blur = min_blur
+        self.max_blur = max_blur
+        self.patch_size = patch_size
+        self.disc_len = disc_len
+        self.seed = seed
+        self.pyramid = []
+        self.features = []
         self.circle = [
             (0, 3), (0, 4), (1, 5), (2, 6),
             (3, 6), (4, 6), (5, 5), (6, 4),
@@ -43,56 +38,26 @@ class ORBDetector(BaseFeatureDetector):
             (3, 0), (2, 0), (1, 1), (0, 2),
         ]
 
-    def detect(self, image: np.ndarray) -> DetectionResult:
-        gray = self._to_gray(image)
-        pyramid = self._build_pyramid(gray)
-        features = []
-
-        for level, pyramid_img in enumerate(pyramid):
-            scale = self.scale_factor ** level
-            level_dist_threshold = max(3, self.dist_threshold / scale)
-            keypoints, scores = self._fast_corner_detection(pyramid_img)
-            keypoints, scores = self._nms(keypoints, scores, level_dist_threshold)
-
-            for (x_level, y_level), score in zip(keypoints, scores):
-                features.append((
-                    int(x_level * scale),
-                    int(y_level * scale),
-                    float(score),
-                ))
-
-        features = self._limit_features(features)
-        keypoints = np.array([(x, y) for x, y, _ in features], dtype=np.float32)
-        scores = np.array([score for _, _, score in features], dtype=np.float32)
-        descriptors = np.empty((len(features), self.descriptor_dim), dtype=np.uint8)
-
-        return DetectionResult(keypoints=keypoints, descriptors=descriptors, scores=scores)
-
-    def _to_gray(self, image: np.ndarray) -> np.ndarray:
-        if image.ndim == 2:
-            return image
-        return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-    def _fast_corner_detection(self, image: np.ndarray):
+    def fast_corner_detection(self, img):
         keypoints = []
         scores = []
         s = self.successive_threshold
         t = self.threshold
 
-        for n in range(image.shape[1] - 7):
-            for m in range(image.shape[0] - 7):
+        for n in range(img.shape[1] - 7):
+            for m in range(img.shape[0] - 7):
                 brighter_count = 0
                 darker_count = 0
                 brighter_differences = []
                 darker_differences = []
                 is_keypoint = False
                 best_score = 0
-                image_window = image[m:m + 7, n:n + 7]
-                center = int(image_window[3, 3])
+                img_window = img[m:m + 7, n:n + 7]
+                center = int(img_window[3, 3])
 
                 for i in range(len(self.circle) + s - 1):
                     x, y = self.circle[i % len(self.circle)]
-                    pixel = int(image_window[x, y])
+                    pixel = int(img_window[x, y])
 
                     if pixel >= center + t:
                         brighter_count += 1
@@ -125,9 +90,12 @@ class ORBDetector(BaseFeatureDetector):
 
         return keypoints, scores
 
-    def _nms(self, keypoints, scores, dist_threshold):
+    def nms(self, keypoints, scores, dist_threshold=None):
         if len(keypoints) == 0:
             return [], []
+
+        if dist_threshold is None:
+            dist_threshold = self.dist_threshold
 
         order = np.argsort(scores)[::-1]
         keypoints = np.array(keypoints)[order]
@@ -148,8 +116,8 @@ class ORBDetector(BaseFeatureDetector):
 
         return selected_keypoints, selected_scores
 
-    def _build_pyramid(self, image: np.ndarray):
-        pyramid = []
+    def build_pyramid(self):
+        self.pyramid = []
 
         for level in range(self.levels):
             if self.levels == 1:
@@ -158,22 +126,115 @@ class ORBDetector(BaseFeatureDetector):
                 blur_power = self.min_blur + (self.max_blur - self.min_blur) * level / (self.levels - 1)
 
             scale = self.scale_factor ** level
-            blurred = cv2.GaussianBlur(image, (5, 5), blur_power)
-            resized = cv2.resize(
-                blurred,
+            img_blurred = cv2.GaussianBlur(self.img, (5, 5), blur_power)
+            img_rescaled = cv2.resize(
+                img_blurred,
                 dsize=None,
                 fx=1 / scale,
                 fy=1 / scale,
                 interpolation=cv2.INTER_AREA,
             )
-            pyramid.append(resized)
+            self.pyramid.append(img_rescaled)
 
-        return pyramid
+        return self.pyramid
 
-    def _limit_features(self, features):
-        if self.max_keypoints is None or len(features) <= self.max_keypoints:
-            return features
-        return sorted(features, key=lambda feature: feature[2], reverse=True)[:self.max_keypoints]
+    def orientation(self, img, patch_size, keypoints):
+        angles = []
+        for x, y in keypoints:
+            r = patch_size // 2
+            m10 = 0
+            m01 = 0
+            patch = img[y-r:y+r+1, x-r:x+r+1]
+            if patch.shape != (patch_size, patch_size):
+                angles.append(None)
+                continue
+            for dx in range(patch_size):
+                for dy in range(patch_size):
+                    I = float(patch[dy, dx])
+                    m10 += (dx - r) * I
+                    m01 += (dy - r) * I
+            angle = np.arctan2(m01, m10)
+            angle = np.rad2deg(angle) % np.rad2deg(2*np.pi)
+            angles.append(angle)
+
+        return angles
+
+    def patterns_search(self, disc_len, patch_size, seed):
+        random.seed(seed)
+        pattern = []
+        while len(pattern) < disc_len:
+            p1 = (random.choice(range(patch_size)) - int(patch_size//2), random.choice(range(patch_size)) - int(patch_size//2))
+            p2 = (random.choice(range(patch_size)) - int(patch_size//2), random.choice(range(patch_size)) - int(patch_size//2))
+            if p1 != p2 and (p1, p2) not in pattern and (p2, p1) not in pattern:
+                pattern.append((p1, p2))
+        
+        return pattern
+
+    def detect(self):
+        if len(self.pyramid) == 0:
+            self.build_pyramid()
+        pattern = self.patterns_search(self.disc_len, self.patch_size, self.seed)
+        self.features = []
+
+        for level, pyramid_img in enumerate(self.pyramid):
+            scale = self.scale_factor ** level
+            level_dist_threshold = max(3, self.dist_threshold / scale)
+            keypoints, scores = self.fast_corner_detection(pyramid_img)
+            keypoints, scores = self.nms(keypoints, scores, level_dist_threshold)
+            angles = self.orientation(pyramid_img, self.patch_size, keypoints)
+
+            for (x_level, y_level), score, angle in zip(keypoints, scores, angles):
+                x_original = int(x_level * scale)
+                y_original = int(y_level * scale)
+                if angle is None:
+                    continue
+                angle_rad = np.deg2rad(angle)        
+                descriptor = []  
+                valid = True  
+                h, w = pyramid_img.shape[:2]
+                for ((dx1,dy1),(dx2,dy2)) in pattern:
+                    x1 = dx1*np.cos(angle_rad) - dy1*np.sin(angle_rad)
+                    y1 = dx1*np.sin(angle_rad) + dy1*np.cos(angle_rad)
+                    x2 = dx2*np.cos(angle_rad) - dy2*np.sin(angle_rad)
+                    y2 = dx2*np.sin(angle_rad) + dy2*np.cos(angle_rad)
+
+                    p1 = (x_level + x1, y_level + y1)
+                    p2 = (x_level + x2, y_level + y2)
+                    x1, y1 = p1
+                    x2, y2 = p2
+
+                    if not (0 <= x1 < w and 0 <= y1 < h and 0 <= x2 < w and 0 <= y2 < h):
+                        valid = False
+                        break
+                    else:
+                        if pyramid_img[int(y1), int(x1)] < pyramid_img[int(y2), int(x2)]:
+                            descriptor.append(1)
+                        else:
+                            descriptor.append(0)
+
+                if self.disc_len == len(descriptor) and valid:
+                    self.features.append({
+                        "pt": (x_original, y_original),
+                        "pt_level": (x_level, y_level),
+                        "level": level,
+                        "scale": scale,
+                        "score": score,
+                        "angle":angle,
+                        "descriptor": descriptor
+                    })
 
 
-ORB = ORBDetector
+        return self.features
+    
+    def draw_keypoints(self, img=None):
+        if img is None:
+            img = self.img.copy()
+        else:
+            img = img.copy()
+
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        for feature in self.features:
+            x, y = feature["pt"]
+            cv2.circle(img, (x, y), 3, (0, 0, 255), -1)
+
+        return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
